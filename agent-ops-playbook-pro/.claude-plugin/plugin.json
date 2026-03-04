@@ -1,0 +1,9 @@
+{
+  "name": "agent-ops-playbook-pro",
+  "version": "1.0.0",
+  "description": "Production operations playbook for AI agents. Covers memory architecture, session discipline, multi-project isolation, sub-agent coordination, and real failure post-mortems.",
+  "author": {
+    "name": "ClawGear",
+    "url": "https://clawgear.io"
+  }
+}

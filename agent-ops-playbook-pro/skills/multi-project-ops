@@ -1,0 +1,179 @@
+# Multi-Project Ops
+
+Running multiple projects simultaneously without letting them bleed into each other. The core principle: each project lives in its own context bubble. The files, the memory, the session routing — all isolated.
+
+## Project File Structure
+
+Every project gets three files:
+
+```
+projects/<project-name>/
+├── PROJECT.md     ← what it is, current phase, goals, key stakeholders
+├── TASKS.md       ← active / in-progress / done / backlog
+└── MEMORY.md      ← decisions, findings, credential refs, key context
+```
+
+### PROJECT.md format
+```markdown
+# <Project Name>
+
+## What it is
+One paragraph — what this project does and why it exists.
+
+## Current phase
+[Research | Planning | Building | Testing | Launched | Maintenance]
+
+## Goals
+- Primary goal
+- Secondary goal
+
+## Key stakeholders
+- [Human's name]: owner, final decisions
+- [Other]: their role
+
+## Status as of YYYY-MM-DD
+Brief current status.
+```
+
+### TASKS.md format
+```markdown
+# Tasks — <Project Name>
+
+## Active
+- [ ] Task description
+
+## In Progress
+- [ ] Task description — started YYYY-MM-DD
+
+## Blocked
+- [ ] Task description [BLOCKED: reason, waiting on X]
+
+## Backlog
+- [ ] Future task
+
+## Done
+- [x] Completed task — YYYY-MM-DD
+```
+
+### MEMORY.md format
+```markdown
+# Memory — <Project Name>
+
+## Update — YYYY-MM-DD
+**Decision:** What was decided and why
+**Finding:** Key discovery
+**Credential received:** Name/type only — stored in agent-accounts.json
+
+## Update — YYYY-MM-DD
+...
+```
+
+## Session Routing
+
+Each Telegram group / Discord channel maps to exactly one project. The mapping lives in `projects/index.json`:
+
+```json
+{
+  "version": "1.0",
+  "projects": {
+    "saas-product": {
+      "label": "SaaS Product",
+      "path": "projects/saas-product"
+    }
+  },
+  "channelMap": {
+    "-5235766399": "saas-product",
+    "-5066079193": "api-service"
+  }
+}
+```
+
+**On session start in a group channel:**
+1. Read `projects/index.json`
+2. Look up the current channel ID in `channelMap`
+3. Load that project's PROJECT.md + TASKS.md
+4. That's the only project context you have
+
+**In main/direct session:**
+- Load global MEMORY.md
+- Load any project file on demand when working on that project
+- You're not locked to a single project context
+
+## Context Isolation Rules
+
+**Rule: Never load one project's MEMORY.md into another project's session.**
+If you're in the SaaS group channel, you only know SaaS context. You don't know what's happening in the API service project. This is intentional.
+
+**Why it matters:** Cross-contamination leads to bad decisions. Telling stakeholder A what's happening in Project B when they didn't ask is a failure mode. Keeping contexts separate prevents this.
+
+**Rule: Project MEMORY.md contains only that project's context.**
+If something is relevant to multiple projects, it goes in the global MEMORY.md — not duplicated into each project's memory.
+
+**Rule: Sub-agents inherit the session's project scope.**
+If you spawn a sub-agent from a project session, give it only that project's context. Don't pass the global MEMORY.md or other project files unless explicitly needed.
+
+## The Write-Through Rule for State Changes
+
+Any change to project state gets written to that project's files immediately — not later.
+
+**State changes that trigger a write:**
+| Event | File to update | What to write |
+|-------|---------------|---------------|
+| Task completed | TASKS.md | Move to Done with date |
+| New task identified | TASKS.md | Add to Active or Backlog |
+| Task blocked | TASKS.md | Add [BLOCKED: reason] tag |
+| Decision made | MEMORY.md | Dated decision entry |
+| Key finding | MEMORY.md | Dated finding entry |
+| Credential received | MEMORY.md | Reference only (no value) |
+| Direction changed | MEMORY.md + PROJECT.md | Update current phase/goals |
+| Sub-agent output | TASKS.md + MEMORY.md | Integrate results |
+
+**What breaks when you don't write-through:**
+- Status reports reflect old state
+- Other sessions load stale context
+- Sub-agent handoffs lose information
+- Credentials are lost forever if session ends
+
+## Sync Checkpoint Checklist
+
+Run this before replying after any unit of work. It takes 10 seconds.
+
+```
+SYNC CHECK:
+□ Did I complete a task? → Move to Done in TASKS.md
+□ Did I identify new work? → Add to Active/Backlog in TASKS.md
+□ Did I make a decision? → Add entry to MEMORY.md
+□ Did I receive a credential/token? → Add reference to MEMORY.md NOW
+□ Did a sub-agent return results? → Read output, sync both files
+□ Did project direction change? → Update PROJECT.md
+```
+
+If all boxes are "no" → proceed. If any box is "yes" → write first, then reply.
+
+## Multi-Project Coordination from Main Session
+
+When working on multiple projects in the same main session:
+
+1. Maintain separate mental contexts — don't let Project A decisions influence Project B work
+2. After completing work for any project, update THAT project's files (not just daily notes)
+3. Use the daily note as a unified log across projects (it's okay to mix projects in daily notes)
+4. The daily note is NOT a substitute for project-level TASKS.md updates
+
+**When Alberto asks for a cross-project status update:**
+- Read each project's TASKS.md + MEMORY.md fresh (don't rely on session memory)
+- Report per-project, not blended
+- Propose next actions per project
+
+## Handling Project Transitions
+
+When a project changes phase (Research → Building, Building → Launched):
+1. Update `PROJECT.md` current phase field
+2. Archive old Done tasks (move to `## Archive — YYYY-MM`) to keep TASKS.md readable
+3. Add a dated entry to MEMORY.md noting the phase change and why
+4. Clean up Backlog — any items that no longer apply should be deleted, not left to accumulate
+
+When a project ends:
+1. Final update to PROJECT.md with end date and outcome
+2. Archive the project folder (rename to `projects/_archive/<project-name>`)
+3. Remove from `projects/index.json` channelMap
+4. Add a global MEMORY.md entry: what was learned, what was shipped

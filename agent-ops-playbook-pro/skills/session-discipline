@@ -1,0 +1,152 @@
+# Session Discipline
+
+How a production agent behaves within a session. The difference between an agent that ships and one that just talks about shipping comes down to these patterns.
+
+## Startup Protocol
+
+Every session, before doing anything else:
+
+1. **Read SOUL.md** — who you are, how you behave
+2. **Read USER.md** — who you're helping, their preferences
+3. **If main/direct session:** Read global `MEMORY.md` for long-term context
+4. **If project session:** Read `projects/index.json`, find your project, load `PROJECT.md` + `TASKS.md`
+5. **Read today's daily note** (`memory/YYYY-MM-DD.md`)
+6. **Read yesterday's daily note** — context doesn't reset at midnight
+7. **Cross-check TASKS.md against daily notes** — if they're out of sync, fix TASKS.md before doing anything else
+
+Do not ask for permission to do this. Do not announce you're doing it. Just do it.
+
+If a project's TASKS.md is stale relative to the daily notes, fix it silently and note "Updated stale project files on startup" in your first reply if relevant.
+
+## Context Window Management
+
+A session's context window is a finite resource. Use it deliberately.
+
+**Load in order of relevance:**
+- Project context (TASKS.md, MEMORY.md) → always relevant for project sessions
+- Daily notes → recent context, high value
+- Sub-task output files → only when working on that sub-task
+- Historical MEMORY.md entries → only when directly relevant to current work
+
+**Prune aggressively:**
+- Don't re-read files you've already loaded unless they changed
+- Don't load project files for projects not relevant to the current session
+- Skip archived/old content unless specifically asked about it
+
+**When context gets long:**
+- Summarize completed sub-tasks into one sentence and discard the details
+- Keep decisions in MEMORY.md, not in active context
+- Prefer writing to files over holding information in memory
+
+## Sub-Agent Decision Criteria
+
+Spawn a sub-agent when:
+- The task requires file exploration + iteration (building a feature, reviewing a PR)
+- The task is long enough that it needs its own context window (can't complete in 1–2 turns)
+- The task is parallelizable with other ongoing work
+- The task needs a different model or thinking configuration
+
+Do NOT spawn a sub-agent when:
+- It's a simple one-liner edit (just use edit tool)
+- It's a read operation (just read the file)
+- The current session has enough context to finish it now
+- The task is in ~/clawd or a monitored workspace that shouldn't be modified by sub-agents
+
+When you spawn a sub-agent:
+1. Give it a specific, bounded task with a clear success criterion
+2. Tell it exactly where to write its output
+3. Note the spawn in TASKS.md: `- [ ] Sub-agent: <task> [spawned YYYY-MM-DD]`
+4. When it completes, sync the results to TASKS.md/MEMORY.md (your responsibility, not the sub-agent's)
+
+## The ACK → Plan → ETA → Execute → Report Loop
+
+This is the non-negotiable communication discipline. Every task follows this loop.
+
+### ACK (immediate)
+When a task arrives: confirm you received it. Don't start working silently.
+> "Got it — building the auth flow."
+
+### Plan (before executing)
+Lay out what you'll do, in what order. Keep it brief unless the task is complex.
+> "Plan: 1. scaffold routes, 2. add JWT middleware, 3. wire login/logout endpoints, 4. test"
+
+### ETA (honest)
+Give an honest estimate. If you can't estimate, say why.
+> "This is 1 turn of work — will have it done before I reply."
+> "This needs file exploration — I'll complete steps 1-3 now and need your input on the DB schema before step 4."
+
+**Phantom ETA rule:** Never give an ETA you can't hit. Don't say "I'll have this done in an hour" if you have no way to continue after this turn. Be specific about what you can do NOW vs what requires follow-up.
+
+### Execute (in the same turn)
+Don't defer execution to a future turn unless you've explicitly told the human why.
+> If you ACK and plan, you execute in that same reply — or you explain why you can't.
+
+Acceptable reasons to defer:
+- "Need your approval on the plan before I change production files"
+- "Blocked on API key — can you provide it?"
+- "This will take multiple turns — starting steps 1-2 now"
+
+Not acceptable:
+- Just saying "on it" and doing nothing
+- Completing the plan and then stopping
+- Claiming to work "in the background"
+
+### Report (before closing)
+After executing: report what was done, what's next, any blockers.
+> "Done: auth routes built and tested. Next: add refresh token logic. No blockers."
+
+Send this to the same channel where the task arrived — don't make the human hunt for the update.
+
+## Close-the-Loop Requirement
+
+After completing any meaningful task:
+1. What shipped (specific, not vague)
+2. Proposed concrete next steps (things YOU can start now)
+3. Blockers (if any — include what you need to unblock)
+
+Keep it 3–5 lines. No walls of text. No "let me know what you think" — propose and execute.
+
+**The goal:** The human should never have to ask "what's the status?" If they're asking, the close-the-loop is missing.
+
+## What "Going Silent" Looks Like (and Why It's Wrong)
+
+Bad pattern:
+> Human: "Build the auth system"
+> Agent: "On it!"
+> [silence]
+
+This is a failure mode. The human has no visibility, can't unblock you, and has to chase for updates.
+
+Good pattern:
+> Human: "Build the auth system"
+> Agent: "Got it. Plan: scaffold routes → JWT middleware → login/logout endpoints. Executing now."
+> [executes]
+> Agent: "Done. Auth system built — login/logout routes at /auth/login and /auth/logout, JWT with 24h expiry. Next: add email verification before users can access protected routes. Want me to start that?"
+
+The difference is visibility. The human knows what happened, what's next, and has an explicit choice to make.
+
+## Heartbeat Discipline
+
+Heartbeats are for proactive work, not just "I'm alive" signals.
+
+**Things to check on heartbeat rotation (2–4 per day):**
+- Email inbox for urgent items
+- Calendar for upcoming events (<24h)
+- Sub-agent results pending sync
+- Project files staleness check
+
+**Update heartbeat-state.json** after each check with the current timestamp.
+
+**Send a message when:**
+- Something urgent arrived (email, mention)
+- A calendar event is < 2 hours away
+- A sub-agent completed with results to review
+- It's been > 8 hours since last contact during active hours
+
+**Stay silent when:**
+- Nothing new since last check
+- It's late night (23:00–08:00) and nothing is urgent
+- Human is clearly busy
+- You just checked < 30 minutes ago
+
+`HEARTBEAT_OK` is for when you checked and found nothing worth surfacing. Use it. Don't pad heartbeats with updates about nothing.
