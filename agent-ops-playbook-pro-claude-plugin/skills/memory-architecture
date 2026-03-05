@@ -1,0 +1,108 @@
+# Memory Architecture
+
+The memory system for production AI agents. Three layers, each with a distinct role. Getting this right is the difference between an agent that accumulates useful context over weeks and one that forgets what it did yesterday.
+
+## The Three Layers
+
+### Layer 1: Project Files (Source of Truth)
+**Files:** `projects/<name>/TASKS.md`, `projects/<name>/MEMORY.md`
+**Role:** Authoritative state for each project. What the project is, what's active, what's done, what key decisions were made.
+**When to write:** Every time project state changes. Not later. Now.
+**When to read:** Every session that touches that project. Cross-check against daily notes on startup.
+
+### Layer 2: Global Long-Term Memory
+**File:** `MEMORY.md` (workspace root)
+**Role:** Personal context that spans projects. Who the human is, cross-project lessons, system facts, credential references.
+**When to write:** When you learn something that applies beyond a single project. Major lessons. System configuration changes. New constraints.
+**When to read:** ONLY in main/direct session with the human. NEVER in group sessions, shared channels, or sub-agents. This contains private context.
+**Security:** Contains personal data. Load only in trusted 1:1 contexts.
+
+### Layer 3: Daily Notes
+**Files:** `memory/YYYY-MM-DD.md`
+**Role:** Raw session log. Everything that happened, in order. The audit trail.
+**When to write:** Throughout every session — task completions, decisions, sub-agent outputs, errors, discoveries.
+**When to read:** During memory audit (comparing against project files for drift). At session start, scan today + yesterday for recent context.
+**Relationship to Layer 1:** Daily notes supplement project files. They never replace them. If a task is done in daily notes but not in TASKS.md, TASKS.md is wrong.
+
+### Support: heartbeat-state.json
+**File:** `memory/heartbeat-state.json`
+**Role:** Tracks last-checked timestamps for periodic tasks (email, calendar, weather, task queue).
+**When to write:** After each heartbeat check. Update the relevant timestamp.
+**When to read:** At heartbeat start, to decide what needs checking.
+
+## Read Order (Priority)
+
+When loading context for a session:
+1. Project TASKS.md + MEMORY.md (if in a project session)
+2. Global MEMORY.md (main session only)
+3. Today's daily note + yesterday's daily note
+4. heartbeat-state.json (heartbeat sessions only)
+
+Never skip step 1 for project sessions. The project files are authoritative — everything else provides supplementary context.
+
+## Project Isolation Rules
+
+Each project's `MEMORY.md` contains ONLY that project's context. Never bleed state from one project into another project's memory file.
+
+Structure:
+```
+projects/
+  index.json                   ← maps channel IDs to project folders
+  saas-product/
+    PROJECT.md                 ← what it is, current phase, goals
+    TASKS.md                   ← active / in-progress / done / backlog
+    MEMORY.md                  ← decisions, key findings, credential refs
+  api-service/
+    PROJECT.md
+    TASKS.md
+    MEMORY.md
+```
+
+The global `MEMORY.md` at workspace root is for cross-project lessons and personal context, not for project state. If you find project-specific state in the global MEMORY.md, move it.
+
+## The 6 Memory Sync Rules
+
+### Rule 1: Write-through on every state change
+Any session that changes project state MUST update that project's TASKS.md and/or MEMORY.md in that same turn. Not at nightly heartbeat. Not "later". Right now, before replying.
+
+Triggers:
+- Task completed → move to Done in TASKS.md with date
+- New task identified → add to Active/Backlog in TASKS.md
+- Decision made → log in MEMORY.md with date
+- Credential received → MEMORY.md immediately (reference only, not the value)
+- Direction changed → MEMORY.md immediately
+
+### Rule 2: Sub-agent handoff is the spawning session's responsibility
+When a sub-agent completes work, the session that spawned it reads the output and syncs to TASKS.md/MEMORY.md. The sub-agent writes output files. The parent integrates them. This handoff is not optional.
+
+### Rule 3: Cross-project work in main session → update that project's files
+If you're in webchat doing work for Project X, update Project X's TASKS.md and MEMORY.md — not just the daily notes. Daily notes are a supplement, not a substitute.
+
+### Rule 4: Staleness check on read
+When opening a project's TASKS.md, cross-check it against daily notes. If daily notes mention completed work that isn't in TASKS.md, the file is stale. Fix it before reporting status. A stale report is worse than no report.
+
+### Rule 5: Nightly heartbeat is a safety net, not the primary write path
+The nightly memory sync is for catching things that slipped through Rules 1–4. If it's doing most of the writing, the real-time system is broken.
+
+### Rule 6: Sync checkpoint after every work block
+Before replying after completing any meaningful unit of work, run this check:
+- Did I change project state? → Update TASKS.md
+- Did I make a decision worth remembering? → Update MEMORY.md
+- Did I receive credentials or tokens? → Update MEMORY.md NOW
+- Did a sub-agent return results? → Read output, sync to parent project
+
+Answer "no" to all four → skip the write. Answer "yes" to any → write the files first, then reply.
+
+## Common Failure Modes
+
+**Symptom:** Project files show old status, but daily notes have current info.
+**Cause:** Write-through wasn't happening. Daily notes updated, project files weren't.
+**Fix:** Run `/memory-audit [project]` to generate the exact patches needed.
+
+**Symptom:** Sub-agent completed work but project is still showing it as "in progress".
+**Cause:** Sub-agent handoff sync wasn't done (Rule 2 violation).
+**Fix:** Read sub-agent output files, manually update TASKS.md and MEMORY.md.
+
+**Symptom:** Credential was received during a session but there's no record of where it was stored.
+**Cause:** Rule 1 (write-through) wasn't triggered for credential events.
+**Fix:** Reconstruct from git log or daily notes if possible. Update Rule 6 checklist to include credential events.

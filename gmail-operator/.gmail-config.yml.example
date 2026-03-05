@@ -1,0 +1,36 @@
+# .gmail-config.yml.example
+# Copy to: ~/.openclaw/.gmail-config.yml
+# Then edit to match your setup.
+
+# Senders that are ALWAYS classified as URGENT (substring match on From: header)
+sender_whitelist:
+  - boss@company.com
+  - cto@company.com
+  - alerts@pagerduty.com
+  - billing@stripe.com
+
+# Keywords in subject or body that trigger URGENT classification (case-insensitive)
+urgent_keywords:
+  - urgent
+  - ASAP
+  - critical
+  - action required
+  - deadline
+  - payment
+  - invoice
+  - emergency
+  - immediate
+  - time-sensitive
+  - overdue
+  - past due
+
+# Minimum minutes between heartbeat checks (prevents rate limiting)
+check_interval_minutes: 15
+
+# Max emails to fetch per check
+max_results: 20
+
+# Telegram alert configuration
+# Set TELEGRAM_BOT_TOKEN as an environment variable (do not hardcode it here)
+telegram_bot_token_env: TELEGRAM_BOT_TOKEN
+telegram_chat_id: "YOUR_CHAT_ID_HERE"

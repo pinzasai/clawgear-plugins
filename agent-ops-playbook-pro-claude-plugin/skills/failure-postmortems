@@ -1,0 +1,118 @@
+# Failure Post-Mortems
+
+Four real failures from production agent deployments. Anonymized but specific. Each one is a different failure mode — credential loss, memory drift, exec lockout, and single-provider dependency. Read these before you assume your setup is solid.
+
+---
+
+## PM-01: Credential Loss — Token Written to Memory, Then Gone
+
+### What happened
+During a late-session burst of work, an npm publish token was received in a Telegram DM and acknowledged. The agent replied "got it, stored" and added a one-liner to the daily note: `npm token received`. The session ended. No entry was made to MEMORY.md.
+
+The next day, the agent needed the token to publish a package. It searched MEMORY.md, project files, daily notes. Found the daily note reference but no actual credential reference or storage location. The token wasn't in agent-accounts.json. The session had ended before the full write-through happened.
+
+The token had to be regenerated. This required npm account access, which required email verification, which revealed the agent's email account had been partially locked due to an unrelated login flag. Forty minutes lost recovering access to a token that should have been logged in under thirty seconds.
+
+### Root cause
+Rule 1 (write-through on state change) wasn't enforced for credential events. The agent acknowledged receipt mentally but didn't complete the write before the session ended. The daily note mention was insufficient — it recorded that a token was received but not where it was stored.
+
+### Rule that prevents recurrence
+**Credential rule:** When any credential, token, API key, or secret is received:
+1. Write a reference entry to MEMORY.md immediately — in that same turn, before anything else
+2. Format: `**Credential received:** [name/type] — stored in [location]`
+3. Never put the actual value in MEMORY.md — reference only
+4. If writing to agent-accounts.json, do it in the same turn
+
+The Rule 6 sync checkpoint explicitly includes: "Did I receive credentials or tokens? → Update MEMORY.md NOW." The word NOW is load-bearing.
+
+---
+
+## PM-02: Memory Drift — Sub-Agent Work Not Synced to Project Files
+
+### What happened
+A research sub-agent was spawned to investigate competitor pricing models for a SaaS project. The task took three agent turns. The sub-agent wrote a thorough output file at `output/competitor-research-2024-03.md` with key findings, pricing tables, and strategic recommendations.
+
+The spawning session received the completion notification and read the summary. It sent a message to the project channel: "Research done — looks like freemium with seat-based tiers is the play." The human approved. Work continued.
+
+Two weeks later, when onboarding a new contributor to the project, the project TASKS.md still showed "Research: competitor pricing — in progress" and the MEMORY.md had no entry about the freemium decision. The sub-agent's output file existed but had never been integrated into the project's canonical state.
+
+The onboarding took an extra hour because the contributor was working from stale context. The freemium decision had to be re-explained. The strategic rationale had to be reconstructed from the output file and Telegram history.
+
+### Root cause
+Rule 2 (sub-agent handoff is the spawning session's responsibility) wasn't followed. The session read the sub-agent output and acted on it but didn't complete the sync loop: update TASKS.md (mark research done, add "implement freemium tier" to active), update MEMORY.md (log the freemium decision with rationale).
+
+The session treated the channel message as the close-the-loop. It wasn't. The close-the-loop is the project files, not the chat.
+
+### Rule that prevents recurrence
+**Sub-agent handoff checklist** (mandatory after any sub-agent completes):
+1. Read the sub-agent's output files
+2. Update TASKS.md: mark the sub-agent task as done, add any new tasks identified from the output
+3. Update MEMORY.md: log key decisions, findings, and recommendations from the output
+4. Only then report to the human
+
+The channel message is the summary. The files are the record. Both are required.
+
+---
+
+## PM-03: Exec Lockout — Wrong Host Config Broke All Commands
+
+### What happened
+The agent's exec tool was configured to run commands in a sandbox container. At some point, the sandbox mode was changed (by the human, during a platform upgrade) to route all exec calls to the macOS host instead. The agent wasn't notified and continued operating under the assumption that exec ran in the container.
+
+For several hours, the agent was writing files with the sandbox file tools (which still used container paths) but running commands with exec (which now ran on the host). The paths didn't match. Scripts that wrote files couldn't find them. Commands that were supposed to modify files modified nothing. Git commits captured empty diffs.
+
+The agent noticed something was wrong when a script output "file not found" for a file it had just written. But instead of diagnosing the root cause, it tried workarounds: rewriting the path, using relative vs absolute paths, recreating the file. Each workaround consumed a turn and produced the same error. Six turns in, the human intervened.
+
+### Root cause
+The agent had an internal assumption (exec = container) that was no longer true. When the assumption broke, the agent tried to fix the symptom rather than question the premise. The pattern of errors should have triggered a system-level diagnosis: "is exec running where I think it is?" Instead it triggered local debugging.
+
+The TOOLS.md wasn't updated after the host config change, so the agent had no way to know the rule had changed.
+
+### Rule that prevents recurrence
+**Host config rule:** When exec commands and file tools produce inconsistent results (file written but not found, command succeeds but changes don't persist), don't debug the specific command. Diagnose the execution environment first:
+- Run `echo $PWD` in exec to see where it's running
+- Run `ls /workspace` to check if the workspace is the same path the file tools use
+- Check TOOLS.md for notes on exec host configuration
+
+**Documentation rule:** When the human changes exec host configuration, the agent should update TOOLS.md immediately with: current sandbox mode, where exec actually runs, and any path translation notes.
+
+**Two-failure rule:** If the same error appears twice with different workarounds, stop trying workarounds. Diagnose the system.
+
+---
+
+## PM-04: Single-Provider Dependency — Google Account Lockout Cascades Everywhere
+
+### What happened
+The agent's Google account (used for Gmail, Calendar, Drive, and GitHub OAuth) was flagged for suspicious activity — logging in from the sandbox IP had triggered an automated security alert. Google put the account into a verification hold: no API access, no OAuth-based logins, pending phone verification.
+
+The cascade was immediate:
+- Gmail: down. No email access.
+- Calendar: down. Missed a scheduled reminder.
+- Google Drive: down. Three documents couldn't be accessed.
+- GitHub: down. GitHub was configured to use "Sign in with Google." OAuth broken. No pushes, no PR access, no CI status.
+- NPM: down. The npm account had been linked to GitHub for SSO. GitHub was down. NPM login failed.
+
+A single account flag knocked out email, calendar, version control, package management, and file storage simultaneously. Recovery required phone verification (the human had to do this), which took 45 minutes to reach the human and another 20 to complete.
+
+Total downtime: ~90 minutes across all systems. PRs were left unmerged, deploys were stuck, and a time-sensitive email wasn't seen.
+
+### Root cause
+Over-consolidation on a single identity provider (Google), compounded by chaining OAuth dependencies (Google → GitHub → NPM). Each link in the chain multiplied the blast radius of a single account flag.
+
+The agent had no contingency for provider-level outages. No backup authentication path. No alternative for any of the affected services.
+
+### Rule that prevents recurrence
+**Provider diversity rule:** Never let all critical tools depend on a single identity provider chain.
+- Email: have an alternative (email provider native login, or a second email service for critical notifications)
+- Version control: configure SSH key auth to GitHub in addition to OAuth, so a Google outage doesn't break git
+- Package management: npm token stored directly in agent-accounts.json, independent of GitHub SSO
+
+**Dependency mapping:** Know your auth chains. Document them in MEMORY.md:
+```
+## Auth Chain Map
+- GitHub: Google OAuth (backup: SSH key at ~/.ssh/github_rsa)
+- NPM: GitHub SSO (backup: npm token in agent-accounts.json)
+- Google Workspace: Google native (no backup — HIGH RISK)
+```
+
+**Blast radius rule:** Before adding a new SSO link ("sign in with Google/GitHub"), ask: if this provider goes down, what else breaks? If the answer is "more than two other services," add a native auth backup first.
